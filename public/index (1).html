@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FairCart — Find the best grocery deals near you</title>
+  <meta name="description" content="A free, non-profit tool that compares grocery prices at stores near you." />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <!-- Leaflet: free map library that uses OpenStreetMap -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="logo" href="/">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 6h3l3.2 14.2a2 2 0 0 0 2 1.6h10.6a2 2 0 0 0 2-1.5L27 11H9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="13" cy="26.5" r="2" fill="currentColor"/><circle cx="22.5" cy="26.5" r="2" fill="currentColor"/></svg>
+        FairCart
+      </a>
+      <span class="tag">Free &amp; non-profit</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <h1>Pay less for groceries.</h1>
+      <p>Tell us where you are and what you need. We'll compare prices at stores near you and show you the best deals.</p>
+    </section>
+
+    <div id="demoBanner" class="banner demo" hidden>
+      <strong>Demo mode:</strong> the prices below are made-up sample data, not real prices.
+      Add Kroger API keys (see README) to see real prices.
+    </div>
+
+    <!-- STEP 1: location -->
+    <section class="card step" id="step1">
+      <div class="step-head"><span class="num">1</span><h2>Where are you?</h2></div>
+      <div class="loc-row">
+        <button id="useLocation" class="btn primary">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z" fill="currentColor"/></svg>
+          Use my location
+        </button>
+        <span class="or">or</span>
+        <form id="zipForm" class="zip-form">
+          <label for="zip" class="sr-only">ZIP code</label>
+          <input id="zip" inputmode="numeric" pattern="\d{5}" maxlength="5" placeholder="ZIP code" autocomplete="postal-code" />
+          <button class="btn" type="submit">Go</button>
+        </form>
+      </div>
+      <p id="locStatus" class="status" role="status"></p>
+
+      <div id="storesArea" hidden>
+        <div id="map" aria-label="Map of nearby grocery stores"></div>
+        <details class="store-list-wrap">
+          <summary id="storeCount">Nearby grocery stores</summary>
+          <ul id="storeList" class="store-list"></ul>
+        </details>
+      </div>
+    </section>
+
+    <!-- STEP 2: shopping list -->
+    <section class="card step" id="step2">
+      <div class="step-head"><span class="num">2</span><h2>What do you need?</h2></div>
+      <form id="listForm">
+        <label for="list" class="sr-only">Shopping list</label>
+        <textarea id="list" rows="4" placeholder="Type your list, like: milk, a dozen eggs, cheap bread, 2 lbs chicken breast, bananas"></textarea>
+        <div class="list-actions">
+          <span class="hint" id="aiHint"></span>
+          <button id="searchBtn" class="btn primary big" type="submit" disabled>Find the best deals</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- STEP 3: results -->
+    <section id="results" class="results" hidden aria-live="polite"></section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>Prices come from store data and can change. Always check the price at the store.
+      Store locations © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.</p>
+      <p>FairCart is a free, non-profit project.</p>
+    </div>
+  </footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
