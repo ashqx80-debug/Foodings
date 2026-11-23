@@ -1,0 +1,13 @@
+{
+  "name": "faircart",
+  "version": "0.1.0",
+  "description": "Free, non-profit grocery deal finder",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
