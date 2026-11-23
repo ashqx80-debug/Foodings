@@ -26,6 +26,8 @@ const PORT = process.env.PORT || 3000;
 const KROGER_ID = process.env.KROGER_CLIENT_ID || "";
 const KROGER_SECRET = process.env.KROGER_CLIENT_SECRET || "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
+// Optional free map key from https://carto.com/basemaps/apikey (makes the map more reliable)
+const CARTO_KEY = process.env.CARTO_API_KEY || "";
 const DEMO_MODE = !KROGER_ID || !KROGER_SECRET;
 
 const MAX_ITEMS = 15; // most items per search
@@ -96,7 +98,9 @@ async function searchKrogerProducts(term, storeId) {
     const item = (p.items || [])[0];
     if (!item || !item.price || !item.price.regular) continue; // no price at this store
     const regular = item.price.regular;
-    const promo = item.price.promo && item.price.promo > 0 ? item.price.promo : null;
+    // A "promo" price only counts as a deal if it's actually lower than regular.
+    const promo = item.price.promo && item.price.promo > 0 && item.price.promo < regular ? item.price.promo : null;
+    const aisle = (p.aisleLocations || [])[0];
     products.push({
       name: p.description,
       brand: p.brand || "",
@@ -104,6 +108,13 @@ async function searchKrogerProducts(term, storeId) {
       regularPrice: regular,
       salePrice: promo,
       price: promo || regular,
+      savings: promo ? Math.round((regular - promo) * 100) / 100 : 0,
+      // HIGH, LOW, TEMPORARILY_OUT_OF_STOCK, or null when Kroger doesn't say
+      stockLevel: item.inventory?.stockLevel || null,
+      aisle: aisle?.description || null, // e.g. "Aisle 35"
+      // Note: "instore" means the store SELLS it, not that it's in stock.
+      pickup: Boolean(item.fulfillment?.curbside),
+      delivery: Boolean(item.fulfillment?.delivery),
       url: p.productPageURI ? `https://www.kroger.com${p.productPageURI}` : null,
       image: pickImage(p.images),
     });
@@ -203,7 +214,7 @@ function parseListSimple(listText) {
     .slice(0, MAX_ITEMS)
     .map((raw) => {
       const search = raw
-        .replace(/^(an?\s+)?(\d+(\.\d+)?\s*)?(x|lbs?|pounds?|oz|gal(lons?)?|dozen|pack|bags?|boxes?|cans?|bottles?|loaf|loaves)?\s+(of\s+)?/i, "")
+        .replace(/^(an?\s+)?(\d+(\.\d+)?\s*)?(x|lbs?|pounds?|oz|gal(lons?)?|dozen|pack|bags?|boxes?|cans?|bottles?|cartons?|jars?|loaf|loaves)?\s+(of\s+)?/i, "")
         .replace(/\b(cheap|cheapest|some|a few|good)\b/gi, "")
         .trim() || raw;
       return { label: raw, search, mustInclude: "", exclude: [] };
@@ -257,17 +268,30 @@ async function runSearch({ lat, lon, list }) {
   return { demo: false, usedAI, stores, results, storeTotals: storeTotals(stores, results) };
 }
 
+const isOutOfStock = (p) => p.stockLevel === "TEMPORARILY_OUT_OF_STOCK";
+
 // Best deal = lowest unit price when sizes are comparable, otherwise lowest price.
+// Out-of-stock items never win; they're listed separately so people know.
 function rankItem(item, options) {
-  const mainUnit = mostCommonUnit(options);
-  options.sort((a, b) => {
+  const inStock = options.filter((o) => !isOutOfStock(o));
+  const outOfStock = options.filter(isOutOfStock);
+  const mainUnit = mostCommonUnit(inStock);
+  inStock.sort((a, b) => {
     const aUnit = a.unit === mainUnit && a.unitPrice != null;
     const bUnit = b.unit === mainUnit && b.unitPrice != null;
     if (aUnit && bUnit) return a.unitPrice - b.unitPrice;
     if (aUnit !== bUnit) return aUnit ? -1 : 1;
     return a.price - b.price;
   });
-  return { item: item.label, search: item.search, best: options[0] || null, others: options.slice(1, 6) };
+  return {
+    item: item.label,
+    search: item.search,
+    best: inStock[0] || null,
+    others: inStock.slice(1, 6),
+    // Other items on sale for this search (deals worth knowing about)
+    deals: inStock.filter((o) => o.salePrice).sort((a, b) => b.savings - a.savings).slice(0, 3),
+    outOfStock: outOfStock.slice(0, 5),
+  };
 }
 
 function mostCommonUnit(options) {
@@ -283,7 +307,7 @@ function storeTotals(stores, results) {
       let total = 0;
       let found = 0;
       for (const r of results) {
-        const all = [r.best, ...r.others].filter((o) => o && o.storeId === store.id);
+        const all = [r.best, ...r.others].filter((o) => o && o.storeId === store.id && !isOutOfStock(o));
         if (all.length) {
           total += Math.min(...all.map((o) => o.price));
           found++;
@@ -304,19 +328,24 @@ function demoSearch(items, usedAI) {
     { id: "demo-c", name: "Demo Store C", chain: "DEMO", address: "Sample data — not a real store" },
   ];
   const sizes = ["16 oz", "32 oz", "1 lb", "64 fl oz", "12 ct"];
+  const stockLevels = ["HIGH", "HIGH", "LOW", "HIGH", "TEMPORARILY_OUT_OF_STOCK", null];
   const results = items.map((item, i) => {
     const options = [];
     stores.forEach((store, s) => {
       for (let k = 0; k < 2; k++) {
         const seed = (item.search.length * 7 + s * 13 + k * 5 + i) % 17;
         const regular = Math.round((1.49 + seed * 0.37) * 100) / 100;
-        const onSale = seed % 4 === 0;
+        const onSale = seed % 3 === 0;
         const salePrice = onSale ? Math.round(regular * 0.8 * 100) / 100 : null;
         options.push(addUnitPrice({
           name: `${k ? "Store Brand" : "Name Brand"} ${item.search}`,
           brand: k ? "Store Brand" : "Name Brand",
           size: sizes[(seed + k) % 2 === 0 ? 0 : 1],
           regularPrice: regular, salePrice, price: salePrice || regular,
+          savings: salePrice ? Math.round((regular - salePrice) * 100) / 100 : 0,
+          stockLevel: stockLevels[seed % stockLevels.length],
+          aisle: `Aisle ${(seed % 20) + 1}`,
+          pickup: seed % 2 === 0, delivery: seed % 3 !== 0,
           url: null, image: null, storeId: store.id,
         }));
       }
@@ -326,7 +355,59 @@ function demoSearch(items, usedAI) {
   return { demo: true, usedAI, stores, results, storeTotals: storeTotals(stores, results) };
 }
 
-// ---------- 7. Web server ----------
+// ---------- 7. Nearby grocery stores (OpenStreetMap / Overpass) ----------
+// Done on the server so we can identify our app politely, try a backup
+// server if one is busy, and remember results so we don't overload them.
+const OVERPASS_SERVERS = [
+  "https://overpass.private.coffee/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+];
+const storeCache = new Map(); // "lat,lon" -> { time, stores }
+
+async function findNearbyStores(lat, lon) {
+  const key = `${lat.toFixed(2)},${lon.toFixed(2)}`; // ~1 km grid
+  const cached = storeCache.get(key);
+  if (cached && Date.now() - cached.time < 60 * 60 * 1000) return cached.stores;
+
+  const radius = 8000; // meters (~5 miles)
+  const query = `[out:json][timeout:20];
+(node["shop"~"^(supermarket|grocery)$"](around:${radius},${lat},${lon});
+ way["shop"~"^(supermarket|grocery)$"](around:${radius},${lat},${lon}););
+out center 60;`;
+
+  let lastError;
+  for (const server of OVERPASS_SERVERS) {
+    try {
+      const res = await fetch(server, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "FairCart/0.1 (free non-profit grocery price finder)",
+        },
+        body: "data=" + encodeURIComponent(query),
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) throw new Error(`${server} answered ${res.status}`);
+      const data = await res.json();
+      const stores = (data.elements || [])
+        .map((el) => ({
+          name: el.tags?.name || el.tags?.brand || "Grocery store",
+          lat: el.lat ?? el.center?.lat,
+          lon: el.lon ?? el.center?.lon,
+        }))
+        .filter((s) => s.lat && s.lon);
+      storeCache.set(key, { time: Date.now(), stores });
+      if (storeCache.size > 500) storeCache.delete(storeCache.keys().next().value);
+      return stores;
+    } catch (err) {
+      lastError = err;
+      console.warn("Store lookup failed:", err.message);
+    }
+  }
+  throw new Error("Store map servers are busy. Try again in a minute.");
+}
+
+// ---------- 8. Web server ----------
 const MIME = {
   ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript",
   ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json",
@@ -341,7 +422,18 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (req.method === "GET" && url.pathname === "/api/status") {
-    return sendJSON(res, 200, { demo: DEMO_MODE, ai: Boolean(ANTHROPIC_KEY) });
+    return sendJSON(res, 200, { demo: DEMO_MODE, ai: Boolean(ANTHROPIC_KEY), cartoKey: CARTO_KEY || null });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/stores") {
+    const lat = parseFloat(url.searchParams.get("lat"));
+    const lon = parseFloat(url.searchParams.get("lon"));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return sendJSON(res, 400, { error: "Missing location." });
+    try {
+      return sendJSON(res, 200, { stores: await findNearbyStores(lat, lon) });
+    } catch (err) {
+      return sendJSON(res, 502, { error: err.message });
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/api/search") {
